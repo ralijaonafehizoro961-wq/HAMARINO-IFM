@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "HAMARINO — IFM",
+    "slug": "hamarino-ifm",
+    "scheme": "hamarino",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {"supportsTablet": true,"bundleIdentifier":"mg.ifm.hamarino"},
+    "android": {"package":"mg.ifm.hamarino","edgeToEdgeEnabled":true},
+    "plugins": [
+      ["expo-image-picker", {
+        "photosPermission": "Choisir une capture pour analyser son texte.",
+        "cameraPermission": "Photographier un document pour détecter son texte.",
+        "microphonePermission": false
+      }]
+    ],
+    "extra": {"projectName":"HAMARINO - FANILO IFM"}
+  }
+}

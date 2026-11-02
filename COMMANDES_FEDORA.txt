@@ -1,0 +1,57 @@
+HAMARINO / IFM — COMMANDES RAPIDES (Fedora + Expo SDK 55)
+========================================================
+
+1) DEZIPPER :
+   unzip IFM_HAMARINO_SDK55.zip
+
+2) INSTALLER LES PRE-REQUIS :
+   sudo dnf install -y python3 python3-pip nodejs npm tesseract tesseract-langpack-fra tesseract-langpack-eng
+   node --version
+   tesseract --list-langs
+
+3) TERMINAL 1 — BACKEND :
+   cd IFM_HAMARINO_SDK55/backend
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   cp .env.example .env
+   nano .env
+   # Changer ADMIN_API_KEY ; laisser les clés externes vides si indisponibles.
+   uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+   Swagger : http://127.0.0.1:8000/docs
+   API test : curl http://127.0.0.1:8000/api/health
+
+4) CONNAITRE SON IP SUR FEDORA :
+   hostname -I
+   # Exemple : 192.168.1.42 -> API : http://192.168.1.42:8000
+
+5) TERMINAL 2 — MOBILE REACT NATIVE :
+   cd IFM_HAMARINO_SDK55/mobile
+   cp .env.example .env
+   nano .env
+   # Remplacer l'IP de EXPO_PUBLIC_API_URL
+   npm install
+   npx expo install --fix
+   npx expo start --lan -c
+
+   Installer Expo Go SDK 55 sur Android via https://expo.dev/go
+   Scanner le QR. Dans l'application -> Reglages -> Tester la connexion.
+
+6) DONNEES DE DEMONSTRATION FICTIVES, SANS INTERNET :
+   cd IFM_HAMARINO_SDK55/backend
+   source .venv/bin/activate
+   python -m app.demo_seed
+
+7) VRAIES SOURCES RSS, INTERNET NECESSAIRE :
+   curl -X POST http://127.0.0.1:8000/api/sources/refresh -H 'X-Admin-Key: VOTRE_CLE_ADMIN'
+
+8) TESTS PYTHON :
+   cd IFM_HAMARINO_SDK55/backend
+   source .venv/bin/activate
+   pip install -r requirements-dev.txt
+   python -m pytest -q
+
+ATTENTION IPHONE : Expo Go de l'App Store iOS ne prend pas en charge
+SDK 55. Voir README.md pour e as go / TestFlight et alternatives.
