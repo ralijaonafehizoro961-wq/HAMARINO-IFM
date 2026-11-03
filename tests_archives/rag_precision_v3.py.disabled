@@ -1,0 +1,40 @@
+from app.rag import fact_gate, retrieve
+from app.precision_search import relevance_gate
+
+CLAIM = 'Le président de Madagascar s est rendu en Russie pour le développement durable'
+GOOD = 'Le chef de l’État dresse un bilan positif de son déplacement en Russie et présente les coopérations avec Moscou.'
+BAD = 'RÉGION DIANA Fanjiry annonce des actions sociales et un développement collectif à Madagascar.'
+PARLIAMENT = 'Le président de l Assemblée nationale s est rendu en Russie pour une coopération interparlementaire.'
+
+
+def test_semantic_alias_of_president_and_travel():
+    assert fact_gate(CLAIM, GOOD)
+
+
+def test_unrelated_article_rejected():
+    assert not fact_gate(CLAIM, BAD)
+
+
+def test_parliament_not_republic_presidency():
+    assert not fact_gate(CLAIM, PARLIAMENT)
+
+
+def test_same_gate_for_online_and_rag():
+    assert relevance_gate(CLAIM, GOOD)
+    assert not relevance_gate(CLAIM, BAD)
+
+
+def test_retrieve_prefers_factual_travel_document(monkeypatch):
+    import app.rag as rag
+    docs=[
+        {'id':'1','title':'Sommet Russie-Afrique','url':'https://www.lexpress.mg/2026/11/sommet.html',
+         'content':GOOD*3,'published_at':'2026-11-02','fetched_at':'2026-11-03',
+         'source_name':'Express','trusted':0},
+        {'id':'2','title':'Association Fanjiry','url':'https://www.lexpress.mg/2026/11/fanjiry.html',
+         'content':BAD*3,'published_at':'2026-11-02','fetched_at':'2026-11-03',
+         'source_name':'Express','trusted':0},
+    ]
+    monkeypatch.setattr(rag,'get_documents',lambda:docs)
+    results=retrieve(CLAIM)
+    assert results and results[0]['document_id']=='1'
+    assert all(item['document_id']!='2' for item in results)

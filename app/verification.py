@@ -1,0 +1,64 @@
+from .candidate_retrieval import retrieve_candidates
+from .evidence_triage import triage_evidence
+from .precision_search import search_for_claim, filter_evidence
+from uuid import uuid4
+from . import db
+from .rag import retrieve
+from .scoring import comparison
+from .factcheck import search_factchecks
+from .ai import extract_claim
+from .evidence_ai import analyze_evidence
+from .live_sources import refresh_recent_if_needed
+
+
+async def verify_text(text, kind='text',input_url=None,extracted_text=None):
+    claim, method=await extract_claim(text)
+    candidates=retrieve_candidates(claim, limit=8)
+    evidence, triage_report=await triage_evidence(claim, candidates)
+    online_sources=await refresh_recent_if_needed(claim,evidence)
+    archive_report={'state':'not_needed','indexed':0}
+    if not evidence:
+        archive_report=await search_for_claim(claim)
+        candidates=retrieve_candidates(claim, limit=8)
+        evidence, triage_report=await triage_evidence(claim, candidates)
+    checks=await search_factchecks(claim)
+    ai_analysis=await analyze_evidence(claim,evidence)
+    
+    
+    verdict = "a_verifier"
+
+    if checks:
+        summary = (
+            "Des fact-checks externes ont été trouvés. "
+            "Vérifier leur affirmation, leur contexte et "
+            "leur date avant de conclure."
+        )
+    elif evidence:
+        summary = (
+            "Des documents similaires existent, mais leur "
+            "similarité ne suffit pas à confirmer ou "
+            "contredire l'affirmation."
+        )
+    else:
+        summary = (
+            "Aucune preuve pertinente trouvée dans la base. "
+            "Cela ne signifie pas que l'affirmation est fausse."
+        )
+    result={
+      'id':str(uuid4()),'input_type':kind,'input_url':input_url,
+      'original_text':text[:10000],'extracted_text':extracted_text,
+      'claim':claim,'extraction_method':method,'verdict':verdict,'summary':summary,
+      'evidence':evidence,'comparison':comparison(evidence),'factchecks':checks,
+      'archive_search':archive_report,
+      'evidence_triage':triage_report,
+      'ai_analysis':ai_analysis,
+      'online_sources':online_sources,
+      'warning':('Outil d’aide à la vérification, pas certification automatique. '
+          'Les sources peuvent être incomplètes ou anciennes. Un journaliste doit vérifier '
+          'le contexte, la date et la correspondance de chaque preuve.'),
+      'next_steps':['Ouvrir les sources originales','Contrôler la date et le contexte',
+                   'Comparer avec une deuxième source indépendante','Demander une validation humaine'],
+      'created_at':db.utcnow()
+    }
+    db.save_verification(result)
+    return result

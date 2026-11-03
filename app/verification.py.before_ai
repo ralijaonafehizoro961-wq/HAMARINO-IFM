@@ -1,0 +1,47 @@
+from uuid import uuid4
+from . import db
+from .rag import retrieve
+from .scoring import comparison
+from .factcheck import search_factchecks
+from .ai import extract_claim
+
+
+async def verify_text(text, kind='text',input_url=None,extracted_text=None):
+    claim, method=await extract_claim(text)
+    evidence=retrieve(claim)
+    checks=await search_factchecks(claim)
+    
+    
+    verdict = "a_verifier"
+
+    if checks:
+        summary = (
+            "Des fact-checks externes ont été trouvés. "
+            "Vérifier leur affirmation, leur contexte et "
+            "leur date avant de conclure."
+        )
+    elif evidence:
+        summary = (
+            "Des documents similaires existent, mais leur "
+            "similarité ne suffit pas à confirmer ou "
+            "contredire l'affirmation."
+        )
+    else:
+        summary = (
+            "Aucune preuve pertinente trouvée dans la base. "
+            "Cela ne signifie pas que l'affirmation est fausse."
+        )
+    result={
+      'id':str(uuid4()),'input_type':kind,'input_url':input_url,
+      'original_text':text[:10000],'extracted_text':extracted_text,
+      'claim':claim,'extraction_method':method,'verdict':verdict,'summary':summary,
+      'evidence':evidence,'comparison':comparison(evidence),'factchecks':checks,
+      'warning':('Outil d’aide à la vérification, pas certification automatique. '
+          'Les sources peuvent être incomplètes ou anciennes. Un journaliste doit vérifier '
+          'le contexte, la date et la correspondance de chaque preuve.'),
+      'next_steps':['Ouvrir les sources originales','Contrôler la date et le contexte',
+                   'Comparer avec une deuxième source indépendante','Demander une validation humaine'],
+      'created_at':db.utcnow()
+    }
+    db.save_verification(result)
+    return result

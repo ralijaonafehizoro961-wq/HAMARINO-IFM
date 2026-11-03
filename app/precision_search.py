@@ -1,0 +1,136 @@
+"""Recherche ciblée de sources publiques; la pertinence n'est jamais une preuve de vérité."""
+import asyncio
+import re
+import unicodedata
+from datetime import datetime
+from urllib.parse import urlencode, urljoin, urlparse
+
+from bs4 import BeautifulSoup
+from .fetcher import fetch_public, extract_article
+from .news_ingest import is_source_link
+from .news_db import put_news
+
+STOP = {'le','la','les','un','une','du','de','des','au','aux','en','et','est',
+        'sont','pour','par','dans','sur','avec','que','qui','son','sa','ses',
+        'cette','ces','il','elle','ils','elles','ete','etre','a','ont','pas',
+        'information','actualite','republique','fait','affirme','selon',
+        'aurait','serait','raison','raisons','deja','plus','nouveau'}
+
+def normalize(text):
+    value = unicodedata.normalize('NFKD',(text or '').casefold())
+    value = ''.join(c for c in value if not unicodedata.combining(c))
+    return re.sub(r'[^a-z0-9]+',' ',value).strip()
+
+def terms(text):
+    return list(dict.fromkeys(x for x in normalize(text).split()
+                              if len(x)>=3 and x not in STOP))
+
+def queries(claim):
+    words = terms(claim)
+    if len(words)<2: return []
+    qs = [' '.join(words[:5]), ' '.join(words[-4:])]
+    # Recherche plus large sans garder tous les qualificatifs.
+    if len(words)>=3: qs.append(' '.join(words[:3]))
+    return list(dict.fromkeys(qs))
+
+def relevance_gate(claim, passage):
+    """Admissibilité à l'examen, pas corroboration factuelle."""
+    ct=set(terms(claim)); pt=set(terms(passage))
+    if len(ct)<2: return False
+    shared=ct & pt
+    if len(shared)<2 or len(shared)/len(ct)<0.45:
+        return False
+    c=normalize(claim); p=normalize(passage)
+    # Ne pas confondre un président de chambre parlementaire avec le chef d'État.
+    if ('president de madagascar' in c or 'president de la republique' in c):
+        if 'president de l assemblee nationale' in p and not (
+                'president de la republique' in p or 'chef de l etat' in p):
+            return False
+    return True
+
+def published_from_html(html):
+    soup=BeautifulSoup(html,'html.parser')
+    for attributes in ({'property':'article:published_time'},
+                       {'itemprop':'datePublished'}, {'name':'datePublished'}):
+        el=soup.find(attrs=attributes)
+        value=(el.get('content') or el.get('datetime')) if el else None
+        if value:
+            try: return datetime.fromisoformat(value.replace('Z','+00:00')).date().isoformat()
+            except ValueError: pass
+    el=soup.find('time',attrs={'datetime':True})
+    if el:
+        try: return datetime.fromisoformat(el['datetime'].replace('Z','+00:00')).date().isoformat()
+        except ValueError: pass
+    return None
+
+def published_from_url(url):
+    # Date mensuelle indicative : ne pas la sauvegarder comme date publiée.
+    match=re.search(r'/((?:19|20)\d{2})/(0[1-9]|1[0-2])/',urlparse(url).path)
+    return (f'{match.group(1)}-{match.group(2)}' if match else None)
+
+async def _find_express(query):
+    url='https://www.lexpress.mg/search?'+urlencode({'q':query})
+    html=await fetch_public(url)
+    soup=BeautifulSoup(html,'html.parser')
+    found=[]
+    for a in soup.select('a[href]'):
+        link=urljoin(url,a['href'])
+        if is_source_link(link,'Express') and re.search(r'/20\d{2}/\d{2}/',link):
+            found.append((link,a.get_text(' ',strip=True)))
+    return found
+
+def candidate_score(claim, title, url):
+    wanted=set(terms(claim)); observed=set(terms(title+' '+urlparse(url).path.replace('-',' ')))
+    overlap=len(wanted & observed)
+    month=published_from_url(url) or '0000-00'
+    return (overlap,month)
+
+async def search_for_claim(claim, max_articles=4):
+    qs=queries(claim)
+    report={'state':'skipped' if not qs else 'searched','queries':qs,'candidates':0,
+            'indexed':0,'examined':0,'rejected':0,'errors':[],'articles':[],
+            'limitations':['Archives ciblées actuellement limitées à L\'Express']}
+    if not qs: return report
+    async def run():
+        responses=await asyncio.gather(*[_find_express(q) for q in qs],return_exceptions=True)
+        candidates={}
+        for response in responses:
+            if isinstance(response,BaseException):
+                report['errors'].append(type(response).__name__)
+            else:
+                for url,title in response: candidates[url]=title
+        report['candidates']=len(candidates)
+        ranked=sorted(candidates.items(),key=lambda item:candidate_score(claim,item[1],item[0]),reverse=True)
+        for url,title in ranked[:14]:
+            if report['indexed']>=max_articles: break
+            try:
+                html=await fetch_public(url)
+                full_title,body=extract_article(html,url)
+                report['examined']+=1
+                if len(body)<120 or not relevance_gate(claim,full_title+' '+body):
+                    report['rejected']+=1
+                    continue
+                published=published_from_html(html)
+                put_news('Express',full_title,url,body[:1200],content=body[:15000],published_at=published)
+                report['indexed']+=1
+                report['articles'].append({'title':full_title,'url':url,'published_at':published,
+                                           'month_from_url':published_from_url(url)})
+            except Exception as exc:
+                report['errors'].append({'url':url,'type':type(exc).__name__})
+    try: await asyncio.wait_for(run(),timeout=35)
+    except TimeoutError: report['state']='timeout'
+    return report
+
+
+def filter_evidence(claim, evidence):
+    from .rag import fact_gate
+
+    return [
+        item for item in evidence
+        if fact_gate(
+            claim,
+            (item.get("title") or "")
+            + " "
+            + (item.get("passage") or ""),
+        )
+    ]

@@ -1,0 +1,46 @@
+"""Retrieval local : TF-IDF mots + caractères, citations exactes, sans verdict automatique."""
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from .db import get_documents
+
+
+def chunks(text, size=800, stride=560):
+    clean=re.sub(r'\s+',' ',text).strip()
+    if not clean: return []
+    out=[]
+    for p in range(0,len(clean),stride):
+        out.append(clean[p:p+size])
+        if p+size>=len(clean):break
+    return out
+
+
+def retrieve(claim: str, limit=5):
+    docs=get_documents()
+    passage_rows=[]
+    for d in docs:
+        for passage in chunks(d['content']):
+            if len(passage)>=50:
+                passage_rows.append((d,passage))
+    if not passage_rows: return []
+    corpus=[claim]+[p for _,p in passage_rows]
+    try:
+        word=TfidfVectorizer(ngram_range=(1,2),strip_accents='unicode',max_features=10000,sublinear_tf=True)
+        char=TfidfVectorizer(analyzer='char_wb',ngram_range=(3,5),max_features=20000,sublinear_tf=True)
+        X=word.fit_transform(corpus)
+        Y=char.fit_transform(corpus)
+        scores=0.65*cosine_similarity(X[0:1],X[1:]).ravel()+0.35*cosine_similarity(Y[0:1],Y[1:]).ravel()
+    except ValueError:
+        return []
+    selected=[]; seen=set()
+    for i in scores.argsort()[::-1]:
+        score=float(scores[i]); d,passage=passage_rows[int(i)]
+        if score<0.085 or d['url'] in seen: continue
+        seen.add(d['url'])
+        selected.append({'document_id':d['id'],'title':d['title'],
+            'source_name':d['source_name'] or 'Source non classée',
+            'url':d['url'],'published_at':d['published_at'],
+            'retrieved_at':d['fetched_at'],'passage':passage,
+            'relevance':round(score,3),'trusted':bool(d['trusted'])})
+        if len(selected)>=limit:break
+    return selected

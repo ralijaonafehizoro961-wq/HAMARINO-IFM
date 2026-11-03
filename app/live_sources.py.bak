@@ -1,0 +1,64 @@
+import asyncio
+import time
+
+from .news_ingest import refresh_all
+
+_last_refresh = 0.0
+_last_report = None
+_refresh_lock = asyncio.Lock()
+
+REFRESH_INTERVAL = 1800
+REFRESH_TIMEOUT = 30
+
+
+async def refresh_recent_if_needed(claim, evidence):
+    global _last_refresh, _last_report
+
+    if len(evidence) >= 2:
+        return {
+            "state": "local_sufficient",
+            "searched_online": False,
+            "feeds": [],
+        }
+
+    async with _refresh_lock:
+        now = time.monotonic()
+
+        if now - _last_refresh < REFRESH_INTERVAL:
+            return {
+                "state": "cached",
+                "searched_online": False,
+                "feeds": _last_report or [],
+            }
+
+        _last_refresh = now
+
+        try:
+            report = await asyncio.wait_for(
+                refresh_all(),
+                timeout=REFRESH_TIMEOUT,
+            )
+
+            _last_report = report
+
+            return {
+                "state": "refreshed",
+                "searched_online": True,
+                "feeds": report,
+            }
+
+        except TimeoutError:
+            return {
+                "state": "timeout",
+                "searched_online": True,
+                "feeds": [],
+                "error": "Actualisation interrompue après 30 secondes",
+            }
+
+        except Exception as exc:
+            return {
+                "state": "error",
+                "searched_online": True,
+                "feeds": [],
+                "error": type(exc).__name__,
+            }
